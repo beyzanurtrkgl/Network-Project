@@ -1,1 +1,1 @@
-console.log("beyza3")
+console.log("beyza")
