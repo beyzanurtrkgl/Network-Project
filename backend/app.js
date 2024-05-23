@@ -3,7 +3,7 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const API_KEY = 'QEJHAMPT0I2OSI0S'; // Alpha Vantage API anahtarınızı buraya ekleyin
+const API_KEY = 'QEJHAMPT0I2OSI0S'; 
 const BASE_URL = 'https://www.alphavantage.co/query';
 
 app.get('/', (req, res) => {
@@ -32,27 +32,10 @@ app.get('/currency/:from_currency/to/:to_currency', async (req, res) => {
   }
 });
 
-app.get('/stock/:symbol', async (req, res) => {
-  const symbol = req.params.symbol;
-  try {
-    const response = await axios.get(`${BASE_URL}?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${API_KEY}`);
-    
-    if (response.data && response.data['Global Quote']) {
-      const stockData = response.data['Global Quote'];
-      res.json({
-        "symbol": symbol,
-        "price": parseFloat(stockData['05. price']),
-        "timestamp": stockData['07. latest trading day'],
-        "source": "Alpha Vantage"
-      });
-    } else {
-      res.status(500).json({ error: 'An error occurred while fetching stock data.' });
-    }
-  } catch (error) {
-    res.status(500).json({ error: 'An error occurred while fetching stock data.' });
-  }
-});
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
+
+
