@@ -1,20 +1,17 @@
+require("dotenv").config();
 const mongoose = require("mongoose");
-const {MONGO_URL} = process.env;
 
-mongoose.Promise = global.Promise;
-
-exports.connect = () => {}
-
-mongoose
-.connect(MONGO_URL,{
-    useNewUrlParser: true
-})
-.then(() => {
+const connect = async () => {
+  try {
+    await mongoose.connect(process.env.MONGO_URL, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
     console.log("Database bağlandı");
-})
-.catch((err) => {
-    console.log("Database Bağlanmadı");
-    console.log(err);
+  } catch (error) {
+    console.error("Veritabanına bağlanırken hata oluştu:", error);
     process.exit(1);
+  }
+};
 
-})
+module.exports = { connect };
