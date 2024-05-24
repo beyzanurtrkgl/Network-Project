@@ -104,7 +104,7 @@ const API_KEY = 'QEJHAMPT0I2OSI0S';
 const BASE_URL = 'https://www.alphavantage.co/query';
 app.get('/', (req, res) => {
   res.send('Exchange Notifier API');
-}); 
+});  
 
 app.get('/currency/:from_currency/to/:to_currency', async (req, res) => {
   const from_currency = req.params.from_currency;
