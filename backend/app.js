@@ -1,138 +1,126 @@
-require("dotenv").config();
-require("./config/database").connect();
-const axios = require('axios');
 const express = require('express');
 const app = express();
-const User = require("./model/user");
 const bodyParser = require("body-parser");
-const jwt = require("jsonwebtoken");
-const auth = require("./middleware/auth");
-const { JWT_KEY } = process.env; 
+const axios = require('axios');
+const redisClient = require('./config/redis');
+const dotenv = require('dotenv');
+const cron = require('node-cron');
+const User = require('./model/user');
+dotenv.config();
+require('./config/database').connect();
+
+const { EXCHANGE_RATE_API_KEY } = process.env;
+const BASE_URL = `https://v6.exchangerate-api.com/v6/${EXCHANGE_RATE_API_KEY}`;
+const port = process.env.PORT;
 
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.json());
 
+const userAuthRoutes = require("./routes/userAuth");
+app.use('/routes', userAuthRoutes);
 
-/**********************************Kullanıcı Kayıt******************************************** */
-// Kullanıcı oluşturma
-app.post('/register', async (req, res) => {
-  console.log("Register endpoint çalışıyor");
-  //hata kontrolü için try catch 
+const userRoutes = require('./routes/set-target');
+app.use('/user', userRoutes);
+
+// Dinamik olarak kullanıcı hedeflerini kontrol et ve döviz kuru verisini çek ve Redis'e yayınla
+async function fetchAndPublishRates() {
   try {
-    const {username , email, password } = req.body;
-    console.log("Gelen istek verisi:", req.body);
+    const users = await User.find();
+    const uniqueCurrencies = new Set();
 
-    // Kullanıcının username, email ve password yazdığını kontrol et
-    if (!(username && email && password)) {
-      console.log("Boş alan bırakılmaz");
-      return res.status(400).send("Please enter username, email and password");
-    }
-
-    // Kullanıcı daha önce kayıt olmuş mu kontrol et
-    const oldUser = await User.findOne({ email });
-    if (oldUser) {
-      console.log("Bu email daha önce kullanılmış");
-      return res.status(400).send("This email has been used before");
-    }
-
-    // Yeni kullanıcı oluşturmak
-    const user = await User.create({
-      username,
-      email,
-      password
-      
-    });
-    console.log("Yeni kullanıcı oluşturuldu:", user);
-
-    // Kullanıcıyı JSON formatında yanıt olarak döndür
-    return res.status(200).json(user);
-
-  } catch (err) {
-    console.error("Bir hata oluştu:", err);
-    return res.status(500).send("Internal Server Error");
-  }
-});
-
-//kullanıcı girişi 
-app.post('/login', async (req, res) => {
-  console.log("aaa")
-  //hataları kontrol etmek için try 
-  try{
-    
-    //inputları al
-    const {email, password} = req.body; 
-    
-    // Kullanıcının username, email ve password yazdığını kontrol et 
-    if(!(email && password)){
-      return res.status(400).send("Please enter username, email and password");
-    }
-
-    //veritabanında kayıtlı mı kontrol et
-    const user = await User.findOne({email}); 
-    if(user &&  (password === user.password)){
-      //token oluştur
-      const token = jwt.sign(
-        {user_id: user._id, email},
-        JWT_KEY,
-        {
-          expiresIn: "1h"
-        }
-      );
-      console.log(`tokenn: ${token} `)
-      //oluşturulan tokeni kullanıcı tokenine eşitle
-      user.token =token; 
-      res.status(200).json(user);
-    }
-    res.status(400).send("Invalid Credenatials");
-
-  }catch(err){
-    console.log(err);
-    
-  }
-});
-
-//token kontrolü
-app.post('/welcome', auth, (req ,res )=>{
-  console.log("token kontrolü")
-  res.status(200).send("Welcome");
-})
-/********************************************************************************************** */
-
-
-/******************************** Döviz Kurları Api ***********************************************/
-const API_KEY = 'QEJHAMPT0I2OSI0S'; 
-const BASE_URL = 'https://www.alphavantage.co/query';
-app.get('/', (req, res) => {
-  res.send('Exchange Notifier API');
-});  
-
-app.get('/currency/:from_currency/to/:to_currency', async (req, res) => {
-  const from_currency = req.params.from_currency;
-  const to_currency = req.params.to_currency;
-  try {
-    
-    const response = await axios.get(`${BASE_URL}?function=CURRENCY_EXCHANGE_RATE&from_currency=${from_currency}&to_currency=${to_currency}&apikey=${API_KEY}`);
-    if (response.data && response.data['Realtime Currency Exchange Rate']) {
-      const exchangeRate = response.data['Realtime Currency Exchange Rate'];
-      res.json({
-        "currency": from_currency,
-        "rate": parseFloat(exchangeRate['5. Exchange Rate']),
-        "timestamp": exchangeRate['6. Last Refreshed'],
-        "source": "Alpha Vantage"
+    // Kullanıcıların hedef döviz kurlarını belirle
+    users.forEach(user => {
+      user.targets.forEach(target => {
+        uniqueCurrencies.add(target.currency);
       });
+    });
+
+    // Her döviz kuru için veriyi çek ve Redis'e yayınla
+    for (const currency of uniqueCurrencies) {
+      console.log(`Fetching exchange rate for ${currency} to TRY`);
+      const response = await axios.get(`${BASE_URL}/pair/${currency}/TRY`);
+      console.log('API Response:', response.data);
+
+      if (response.data && response.data.conversion_rate) {
+        const rateData = {
+          currency: currency,
+          rate: response.data.conversion_rate,
+          timestamp: new Date().toISOString(),
+          source: 'ExchangeRate-API'
+        };
+
+        console.log('Fetched rate data:', rateData);
+
+        redisClient.publish('rateChange', JSON.stringify(rateData), (err, reply) => {
+          if (err) {
+            console.error('Error publishing to Redis:', err);
+          } else {
+            console.log('Successfully published to Redis:', reply);
+          }
+        });
+      } else {
+        console.error('Invalid API response:', response.data);
+      }
+    }
+  } catch (error) {
+    console.error('Error fetching currency exchange rate:', error);
+  }
+}
+
+// GET /currency/:from_currency/to/:to_currency endpoint'i
+app.get('/currency/:from_currency/to/:to_currency', async (req, res) => {
+  const { from_currency, to_currency } = req.params;
+  try {
+    console.log(`Fetching exchange rate for ${from_currency} to ${to_currency}`);
+    const response = await axios.get(`${BASE_URL}/pair/${from_currency}/${to_currency}`);
+    console.log('API Response:', response.data);
+
+    if (response.data && response.data.conversion_rate) {
+      const rateData = {
+        currency: from_currency,
+        rate: response.data.conversion_rate,
+        timestamp: new Date().toISOString(),
+        source: 'ExchangeRate-API'
+      };
+
+      console.log('Fetched rate data:', rateData);
+
+      redisClient.publish('rateChange', JSON.stringify(rateData), (err, reply) => {
+        if (err) {
+          console.error('Error publishing to Redis:', err);
+        } else {
+          console.log('Successfully published to Redis:', reply);
+        }
+      });
+
+      res.json(rateData);
     } else {
+      console.error('Invalid API response:', response.data);
       res.status(500).json({ error: 'An error occurred while fetching currency exchange rate.' });
     }
   } catch (error) {
+    console.error('Error fetching currency exchange rate:', error);
     res.status(500).json({ error: 'An error occurred while fetching currency exchange rate.' });
   }
 });
 
-/************************************************************************************************/
-
-
-
-app.listen(process.env.PORT, () => {
-  console.log("Port 3000 is listening");
+// Zamanlanmış görev: Her dakika döviz kuru kontrolü
+cron.schedule('* * * * *', () => {
+  console.log('Running a scheduled task');
+  fetchAndPublishRates();
 });
 
+redisClient.on('ready', () => {
+  console.log('Redis client is ready');
+  console.log(`Process.env.PORT: ${process.env.PORT}`);
+  console.log(`Port variable: ${port}`);
+  app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+  });
+});
+
+redisClient.on('error', (err) => {
+  console.error('Redis connection error:', err);
+});
+
+module.exports = app;
